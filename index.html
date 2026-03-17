@@ -2,11 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <title>Glitch Ascent - Free HTML5 Game</title>
+  <meta name="description" content="Play Glitch Ascent - Tap to climb glowing platforms while random control reversals and gravity shifts corrupt your path upward.">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <meta name="description" content="Glitch Ascent — Toggle SOLID/GHOST to climb the corrupted server tower. One mechanic. Infinite tension.">
-  <meta property="og:title" content="Glitch Ascent — Phase Lock">
-  <meta property="og:description" content="Toggle between SOLID and GHOST states to survive the corrupted tower.">
-  <title>Glitch Ascent</title>
+  <meta name="theme-color" content="#0a0a1a">
+  <meta property="og:title" content="Glitch Ascent - Free HTML5 Game">
+  <meta property="og:description" content="Tap to toggle between SOLID and GHOST states. Climb the corrupted server tower. How high can you go?">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://balinti.github.io/glitch-ascent/">
+  <meta property="og:image" content="https://balinti.github.io/glitch-ascent/preview.png">
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4099346100621490" crossorigin="anonymous"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -15,962 +19,453 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      height: 100vh;
+      min-height: 100vh;
       overflow: hidden;
-      touch-action: none;
       font-family: 'Courier New', monospace;
     }
     #wrap {
-      width: min(420px, 100vw);
-      height: min(750px, 100vh);
       position: relative;
+      width: 100%;
+      max-width: 420px;
+      height: 100vh;
+      max-height: 750px;
     }
     canvas {
       display: block;
       width: 100%;
       height: 100%;
-      image-rendering: pixelated;
+      touch-action: none;
     }
   </style>
 </head>
 <body>
 <div id="wrap"><canvas id="c"></canvas></div>
 <script>
-// ============================================================
-// SETUP
-// ============================================================
-const C = document.getElementById('c');
-const ctx = C.getContext('2d');
-const WRAP = document.getElementById('wrap');
-let W, H, DPR;
+(function(){
+'use strict';
 
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('wrap');
+
+let W, H, DPR;
 function resize() {
-  const r = WRAP.getBoundingClientRect();
-  W = Math.floor(r.width);
-  H = Math.floor(r.height);
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  C.width = W * DPR;
-  C.height = H * DPR;
-  C.style.width = W + 'px';
-  C.style.height = H + 'px';
+  DPR = window.devicePixelRatio || 1;
+  W = wrap.clientWidth;
+  H = wrap.clientHeight;
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 }
-window.addEventListener('resize', () => { resize(); });
 resize();
+window.addEventListener('resize', resize);
 
-// ============================================================
-// CONSTANTS
-// ============================================================
-const GRAVITY = 0.40;
-const BOUNCE_BASE = -14.2;
-const PL_W = 16, PL_H = 20;
-const PLAT_H = 12;
-const TRAIL_LEN = 4;
+let state = 'start';
+let score = 0;
+let best = parseInt(localStorage.getItem('ga_best') || '0');
+let combo = 1;
+let comboCount = 0;
+let hue = 180;
+let shake = 0;
+let shakeDx = 0, shakeDy = 0;
+let particles = [];
+let platforms = [];
+let scrollSpeed = 1.2;
+let lastTime = 0;
 
-// ============================================================
-// PERSISTENCE
-// ============================================================
-let highScore = parseInt(localStorage.getItem('ga_hs') || '0');
-function saveHS() { localStorage.setItem('ga_hs', String(highScore)); }
-
-const qChallenge = parseInt(new URLSearchParams(location.search).get('challenge') || '0');
-
-// ============================================================
-// GAME STATE
-// ============================================================
-let state = 'start'; // 'start' | 'playing' | 'dead' | 'gameover'
-let score, landings, combo, comboMult;
-let sessionRuns = 0;
-let deathTimer = 0;
-let deathFlash = 0;
-let hitStopRemain = 0;
-let isNewBest = false;
-let retryReady = false;
-let zoneMsg = null;
-let lastZone = -1;
-let bgHue = 220;
-let scrollDistTotal = 0;
-let nextSpawnDist = 0;
-
-// objects
-let pl, platforms, particles, floaters, rainCols;
-
-// screen shake
-let shakeX = 0, shakeY = 0, shakeMag = 0, shakeFrames = 0;
-
-// ============================================================
-// UTILS
-// ============================================================
-const rnd = (lo, hi) => lo + Math.random() * (hi - lo);
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-
-// ============================================================
-// SCROLL SPEED
-// ============================================================
-function getScroll() {
-  return Math.min(1.5 + Math.floor(landings / 25) * 0.35, 5.5);
-}
-
-// ============================================================
-// INIT / RESET
-// ============================================================
-function initGame() {
-  score = 0; landings = 0; combo = 0; comboMult = 1;
-  isNewBest = false; retryReady = false;
-  deathTimer = 0; deathFlash = 0; hitStopRemain = 0;
-  shakeX = 0; shakeY = 0; shakeMag = 0; shakeFrames = 0;
-  bgHue = 220; lastZone = -1; zoneMsg = null;
-  scrollDistTotal = 0; nextSpawnDist = 0;
-  particles = []; floaters = [];
-
-  pl = {
+let player = {};
+function resetPlayer() {
+  player = {
     x: W / 2,
-    y: H * 0.68,
-    prevY: H * 0.68,
+    y: H * 0.65,
+    w: 28,
+    h: 28,
     vy: 0,
-    state: 'solid',
-    trail: [],
-    splitAnim: 0
+    solid: true,
+    onGround: false,
+    dead: false,
+    deathTimer: 0,
+    glitchTimer: 0,
   };
+}
 
-  initRain();
+function makePlatform(y, forceType) {
+  const type = forceType || (Math.random() < 0.65 ? 'safe' : 'corrupt');
+  const w = 60 + Math.random() * 90;
+  const x = 20 + Math.random() * (W - 40 - w);
+  return { x, y, w, h: 14, type, hit: false, flash: 0 };
+}
 
+function initPlatforms() {
   platforms = [];
-  // First platform: safe, centered, directly below player
-  platforms.push({
-    x: W / 2 - 80, y: pl.y + PL_H / 2 + 6,
-    w: 160, h: PLAT_H,
-    type: 'safe', moving: false, dx: 0,
-    flashTimer: 0, flickerOff: 0
-  });
-
-  // Pre-fill platforms above screen
-  let sy = pl.y - rnd(100, 130);
-  for (let i = 0; i < 9; i++) {
-    platforms.push(makePlatform(sy));
-    sy -= getPlatGap();
-  }
-  nextSpawnDist = scrollDistTotal + getPlatGap();
-}
-
-// ============================================================
-// PLATFORM FACTORY
-// ============================================================
-function makePlatform(y) {
-  const w = getPlatW();
-  const type = getPlatType();
-  const moving = shouldMove();
-  const halfRange = clamp((W - w) / 2 - 10, 0, 45);
-  const offX = (Math.random() - 0.5) * halfRange * 2;
-  const x = clamp(W / 2 - w / 2 + offX, 5, W - w - 5);
-  return {
-    x, y, w, h: PLAT_H, type, moving,
-    dx: moving ? (Math.random() > 0.5 ? 1 : -1) * rnd(0.8, 1.8) : 0,
-    flashTimer: 0,
-    flickerOff: Math.random() * Math.PI * 2
-  };
-}
-
-function getPlatW() {
-  if (landings >= 250) return rnd(50, 85);
-  if (landings >= 80)  return rnd(90, 135);
-  return rnd(120, 165);
-}
-
-function getPlatType() {
-  if (landings < 20) return 'safe';
-  const r = Math.random();
-  if (landings < 40)  return r < 0.25 ? 'corrupt' : 'safe';
-  if (landings < 80)  return r < 0.42 ? 'corrupt' : 'safe';
-  if (landings < 150) return r < 0.52 ? 'corrupt' : 'safe';
-  if (landings < 250) {
-    if (r < 0.28) return 'flicker';
-    return r < 0.60 ? 'corrupt' : 'safe';
-  }
-  if (r < 0.32) return 'flicker';
-  return r < 0.65 ? 'corrupt' : 'safe';
-}
-
-function shouldMove() {
-  if (landings < 40)  return false;
-  if (landings < 80)  return Math.random() < 0.20;
-  if (landings < 150) return Math.random() < 0.38;
-  return Math.random() < 0.52;
-}
-
-function getPlatGap() {
-  const s = getScroll();
-  const maxG = s > 4 ? 98 : s > 3 ? 116 : 138;
-  return rnd(78, maxG);
-}
-
-function effectiveType(p) {
-  if (p.type !== 'flicker') return p.type;
-  return Math.sin(Date.now() / 400 + p.flickerOff) > 0 ? 'safe' : 'corrupt';
-}
-
-// ============================================================
-// BINARY RAIN
-// ============================================================
-function initRain() {
-  rainCols = [];
-  const cols = Math.floor(W / 14);
-  for (let i = 0; i < cols; i++) {
-    rainCols.push({
-      x: i * 14 + 7 + rnd(-2, 2),
-      y: rnd(-H, H),
-      speed: rnd(0.5, 1.4),
-      chars: Array.from({ length: 22 }, () => Math.random() > 0.5 ? '1' : '0'),
-      gap: rnd(13, 17)
-    });
+  platforms.push({ x: W/2 - 70, y: H * 0.7, w: 140, h: 14, type: 'safe', hit: false, flash: 0 });
+  let py = H * 0.7 - 90;
+  for (let i = 0; i < 20; i++) {
+    const t = i < 4 ? 'safe' : undefined;
+    platforms.push(makePlatform(py, t));
+    py -= 75 + Math.random() * 40;
   }
 }
 
-function updateRain() {
-  const rs = getScroll() * 0.28;
-  for (const c of rainCols) {
-    c.y += c.speed * rs;
-    if (c.y > H + 220) {
-      c.y = -rnd(50, 200);
-      c.chars = c.chars.map(() => Math.random() > 0.5 ? '1' : '0');
-    }
-  }
-}
-
-function drawRain() {
-  const op = clamp(0.07 + (landings / 200) * 0.33, 0.07, 0.40);
-  ctx.save();
-  ctx.font = '10px monospace';
-  ctx.textAlign = 'center';
-  for (const c of rainCols) {
-    for (let i = 0; i < c.chars.length; i++) {
-      const cy = c.y - i * c.gap;
-      if (cy < -14 || cy > H + 5) continue;
-      const a = op * (1 - i / c.chars.length) * 0.85;
-      ctx.fillStyle = `rgba(0,255,180,${a})`;
-      ctx.fillText(c.chars[i], c.x, cy);
-    }
-  }
-  ctx.restore();
-}
-
-// ============================================================
-// PARTICLES
-// ============================================================
-function emitParticles(x, y, n, color, maxSpd) {
-  maxSpd = maxSpd || 4;
+function spawnParticles(x, y, col, n) {
   for (let i = 0; i < n; i++) {
-    const a = Math.PI * 2 * i / n + rnd(-0.4, 0.4);
-    const s = rnd(1, maxSpd);
+    const angle = Math.random() * Math.PI * 2;
+    const spd = 1.5 + Math.random() * 3;
     particles.push({
-      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-      life: 1, decay: rnd(0.04, 0.09),
-      size: rnd(2, 5), color, shard: false
+      x, y,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd,
+      life: 1,
+      decay: 0.03 + Math.random() * 0.04,
+      r: 2 + Math.random() * 3,
+      col,
     });
   }
 }
 
-function emitShards(x, y, color) {
-  for (let i = 0; i < 12; i++) {
-    const a = Math.PI * 2 * i / 12 + rnd(-0.2, 0.2);
-    const s = rnd(3, 9);
-    particles.push({
-      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2,
-      life: 1, decay: rnd(0.014, 0.038),
-      size: rnd(3, 7), color, shard: true
-    });
-  }
+function startGame() {
+  score = 0;
+  combo = 1;
+  comboCount = 0;
+  scrollSpeed = 1.2;
+  hue = 180;
+  particles = [];
+  shake = 0;
+  resetPlayer();
+  initPlatforms();
+  state = 'playing';
 }
 
-function updateParticles() {
+function onInput() {
+  if (state === 'start') { startGame(); return; }
+  if (state === 'gameover') { startGame(); return; }
+  if (state === 'playing' && !player.dead) {
+    player.solid = !player.solid;
+    player.glitchTimer = 8;
+    if (!player.solid) { combo = 1; comboCount = 0; }
+    spawnParticles(player.x, player.y, player.solid ? '#0ff' : '#c0f', 8);
+  }
+}
+canvas.addEventListener('pointerdown', onInput);
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); onInput(); }
+});
+
+const GRAVITY = 0.45;
+const MAX_FALL = 12;
+
+function triggerDeath() {
+  player.dead = true;
+  player.deathTimer = 50;
+  shake = 18;
+  spawnParticles(player.x, player.y, '#f44', 28);
+  if (score > best) { best = score; localStorage.setItem('ga_best', best); }
+}
+
+function update() {
+  scrollSpeed = 1.2 + score * 0.012;
+
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
-    p.x += p.vx; p.y += p.vy;
-    if (p.shard) p.vy += 0.28;
-    p.vx *= 0.96; p.vy *= 0.96;
-    p.life -= p.decay;
+    p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.life -= p.decay;
     if (p.life <= 0) particles.splice(i, 1);
   }
+
+  if (shake > 0) {
+    shakeDx = (Math.random() - 0.5) * shake;
+    shakeDy = (Math.random() - 0.5) * shake;
+    shake *= 0.82;
+    if (shake < 0.5) shake = 0;
+  } else { shakeDx = 0; shakeDy = 0; }
+
+  if (player.dead) {
+    player.deathTimer--;
+    if (player.deathTimer <= 0) state = 'gameover';
+    return;
+  }
+
+  player.vy += GRAVITY;
+  if (player.vy > MAX_FALL) player.vy = MAX_FALL;
+  player.y += player.vy;
+
+  for (let p of platforms) p.y += scrollSpeed;
+  platforms = platforms.filter(p => p.y < H + 40);
+  const topY = platforms.length ? Math.min(...platforms.map(p => p.y)) : 0;
+  while (platforms.length < 22) {
+    platforms.push(makePlatform(topY - 75 - Math.random() * 50));
+  }
+
+  if (player.glitchTimer > 0) player.glitchTimer--;
+
+  player.onGround = false;
+
+  if (player.solid) {
+    for (let p of platforms) {
+      if (
+        player.vy >= 0 &&
+        player.x + player.w/2 > p.x &&
+        player.x - player.w/2 < p.x + p.w &&
+        player.y + player.h/2 >= p.y &&
+        player.y + player.h/2 <= p.y + p.h + player.vy + 2
+      ) {
+        if (p.type === 'safe') {
+          player.y = p.y - player.h/2;
+          player.vy = 0;
+          player.onGround = true;
+          if (!p.hit) {
+            p.hit = true;
+            p.flash = 12;
+            score += combo;
+            comboCount++;
+            if (comboCount >= 3) combo = Math.min(combo * 2, 8);
+            spawnParticles(player.x, p.y, `hsl(${hue},100%,70%)`, 6);
+          }
+        } else {
+          p.flash = 20;
+          triggerDeath();
+          return;
+        }
+      }
+    }
+  }
+  // GHOST: no collision with either type
+
+  if (player.y - player.h/2 > H + 40) { triggerDeath(); }
+
+  player.x = W / 2;
+}
+
+function drawBg() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, `hsl(${(hue+180)%360},60%,7%)`);
+  grad.addColorStop(1, `hsl(${hue},60%,3%)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = `hsla(${hue},80%,50%,0.05)`;
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+}
+
+function drawPlatform(p) {
+  if (p.type === 'safe') {
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = p.flash > 0 ? 20 : 8;
+    ctx.fillStyle = p.flash > 0 ? '#fff' : 'rgba(0,255,220,0.85)';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = p.flash > 0 ? '#0ff' : 'rgba(0,200,180,0.7)';
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('[SAFE]', p.x + p.w/2, p.y + 10);
+  } else {
+    ctx.shadowColor = '#f0f';
+    ctx.shadowBlur = p.flash > 0 ? 24 : 10;
+    ctx.fillStyle = p.flash > 0 ? '#f44' : 'rgba(200,0,255,0.85)';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(p.x, p.y, p.w, p.h);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 3;
+    for (let sx = p.x - p.h; sx < p.x + p.w; sx += 8) {
+      ctx.beginPath();
+      ctx.moveTo(sx, p.y + p.h);
+      ctx.lineTo(sx + p.h, p.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = p.flash > 0 ? '#ff0' : 'rgba(255,100,255,0.8)';
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('[CORRUPT]', p.x + p.w/2, p.y + 10);
+  }
+  ctx.shadowBlur = 0;
+  if (p.flash > 0) p.flash--;
+}
+
+function drawPlayer() {
+  const { x, y, w, h, solid, glitchTimer, dead, deathTimer } = player;
+  if (dead) {
+    ctx.save();
+    ctx.globalAlpha = deathTimer / 50;
+    ctx.shadowColor = '#f44';
+    ctx.shadowBlur = 30;
+    ctx.fillStyle = '#f44';
+    ctx.fillRect(x - w/2, y - h/2, w, h);
+    ctx.restore();
+    return;
+  }
+  const glitch = glitchTimer > 0;
+  if (solid) {
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = glitch ? 30 : 14;
+    ctx.fillStyle = '#0ff';
+    ctx.fillRect(x - w/2, y - h/2, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillRect(x - w/2 + 4, y - h/2 + 4, w - 8, 5);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#003';
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('SOLID', x, y + 4);
+  } else {
+    ctx.shadowColor = '#c0f';
+    ctx.shadowBlur = glitch ? 30 : 14;
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#c0f';
+    ctx.fillRect(x - w/2, y - h/2, w, h);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#c0f';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - w/2, y - h/2, w, h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GHOST', x, y + 4);
+  }
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
 }
 
 function drawParticles() {
   for (const p of particles) {
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, p.life);
-    ctx.fillStyle = p.color;
-    if (p.shard) {
-      ctx.translate(p.x, p.y);
-      ctx.rotate(Math.atan2(p.vy, p.vx));
-      ctx.fillRect(-p.size, -p.size * 0.35, p.size * 2, p.size * 0.7);
-    } else {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.col;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+    ctx.fill();
   }
+  ctx.globalAlpha = 1;
 }
 
-// ============================================================
-// SCORE FLOATERS
-// ============================================================
-function spawnFloater(x, y, text, color) {
-  floaters.push({ x, y, vy: -1.8, alpha: 1.0, text, color });
-}
-
-function updateFloaters() {
-  for (let i = floaters.length - 1; i >= 0; i--) {
-    const f = floaters[i];
-    f.y += f.vy;
-    f.alpha -= 0.022;
-    if (f.alpha <= 0) floaters.splice(i, 1);
-  }
-}
-
-function drawFloaters() {
-  ctx.save();
-  ctx.textAlign = 'center';
-  for (const f of floaters) {
-    ctx.globalAlpha = f.alpha;
-    ctx.fillStyle = f.color;
-    ctx.font = `bold ${comboMult >= 4 ? 19 : 15}px monospace`;
-    ctx.fillText(f.text, f.x, f.y);
-  }
-  ctx.restore();
-}
-
-// ============================================================
-// SCREEN SHAKE
-// ============================================================
-function triggerShake(mag, frames) { shakeMag = mag; shakeFrames = frames; }
-
-function updateShake() {
-  if (shakeFrames > 0) {
-    const t = shakeFrames / 6;
-    shakeX = (Math.random() - 0.5) * 2 * shakeMag * t;
-    shakeY = (Math.random() - 0.5) * 2 * shakeMag * t;
-    shakeFrames--;
-  } else {
-    shakeX = 0; shakeY = 0;
-  }
-}
-
-// ============================================================
-// ZONE ANNOUNCEMENTS
-// ============================================================
-const ZONES = [
-  { at: 20,  text: 'CORRUPT ZONE AHEAD' },
-  { at: 40,  text: 'BARRIERS NARROWING' },
-  { at: 80,  text: 'ENTERING CORRUPT ZONE' },
-  { at: 150, text: 'FLICKER SEQUENCE' },
-  { at: 250, text: 'NARROW SEAMS' },
-];
-
-function checkZones() {
-  for (const z of ZONES) {
-    if (landings >= z.at && lastZone < z.at) {
-      zoneMsg = { text: z.text, alpha: 1.0 };
-      lastZone = z.at;
-      break;
-    }
-  }
-}
-
-// ============================================================
-// COMBO
-// ============================================================
-function calcMult(c) {
-  if (c >= 8) return 8;
-  if (c >= 4) return 4;
-  if (c >= 2) return 2;
-  return 1;
-}
-
-// ============================================================
-// DEATH
-// ============================================================
-function triggerDeath() {
-  if (state !== 'playing') return;
-  state = 'dead';
-  deathFlash = 2;
-  hitStopRemain = 80;
-  deathTimer = 0;
-  retryReady = false;
-  triggerShake(8, 6);
-  const shardColor = pl.state === 'solid' ? '#0fffc8' : '#b060ff';
-  emitShards(pl.x, pl.y, shardColor);
-  sessionRuns++;
-  if (score > highScore) { highScore = score; saveHS(); isNewBest = true; }
-}
-
-// ============================================================
-// INPUT
-// ============================================================
-function handleAction() {
-  if (state === 'start') {
-    state = 'playing';
-    initGame();
-    return;
-  }
-  if (state === 'playing') {
-    pl.state = pl.state === 'solid' ? 'ghost' : 'solid';
-    pl.splitAnim = 3;
-    return;
-  }
-  if (state === 'gameover' && retryReady) {
-    isNewBest = false;
-    state = 'playing';
-    initGame();
-  }
-}
-
-window.addEventListener('pointerdown', e => {
-  e.preventDefault();
-  // Share button check on gameover
-  if (state === 'gameover' && retryReady) {
-    const bx = W / 2, by = H * 0.76;
-    const sw = 140, sh = 36;
-    if (Math.abs(e.clientX - (WRAP.getBoundingClientRect().left + bx)) < sw / 2 &&
-        Math.abs(e.clientY - (WRAP.getBoundingClientRect().top + by)) < sh / 2) {
-      doShare();
-      return;
-    }
-  }
-  handleAction();
-}, { passive: false });
-
-window.addEventListener('keydown', e => {
-  if (e.code === 'Space' || e.code === 'Enter') {
-    e.preventDefault();
-    handleAction();
-  }
-});
-
-function doShare() {
-  const text = `I climbed to ${score} pts in GLITCH ASCENT (×${comboMult} combo peak) — can you beat it?`;
-  const url = `https://balinti.github.io/glitch-ascent/?challenge=${score}`;
-  if (navigator.share) {
-    navigator.share({ title: 'Glitch Ascent', text, url }).catch(() => {});
-  } else {
-    navigator.clipboard.writeText(`${text}\n${url}`).then(() => {
-      spawnFloater(W / 2, H * 0.6, 'COPIED!', '#0ff');
-    }).catch(() => {});
-  }
-}
-
-// ============================================================
-// UPDATE
-// ============================================================
-let lastTime = 0;
-
-function update(ts) {
-  const dt = Math.min(ts - lastTime, 50);
-  lastTime = ts;
-
-  if (state === 'dead') {
-    if (hitStopRemain > 0) {
-      hitStopRemain -= dt;
-      updateParticles();
-      updateShake();
-      return;
-    }
-    deathTimer += dt;
-    updateParticles();
-    updateShake();
-    if (deathTimer > 800) {
-      state = 'gameover';
-    }
-    return;
-  }
-
-  if (state !== 'playing') return;
-
-  const scroll = getScroll();
-  bgHue = clamp(220 + (landings / 300) * 100, 220, 320);
-
-  updateShake();
-  updateRain();
-
-  // Zone check
-  checkZones();
-  if (zoneMsg) { zoneMsg.alpha -= 0.007; if (zoneMsg.alpha <= 0) zoneMsg = null; }
-
-  // Death flash decay
-  if (deathFlash > 0) deathFlash--;
-
-  // Platforms
-  for (let i = platforms.length - 1; i >= 0; i--) {
-    const p = platforms[i];
-    p.y += scroll;
-    if (p.moving) {
-      p.x += p.dx;
-      if (p.x < 5 || p.x + p.w > W - 5) {
-        p.dx *= -1;
-        p.x = clamp(p.x, 5, W - p.w - 5);
-      }
-    }
-    if (p.flashTimer > 0) p.flashTimer--;
-    if (p.y > H + 24) platforms.splice(i, 1);
-  }
-
-  // Spawn new platforms
-  scrollDistTotal += scroll;
-  while (scrollDistTotal >= nextSpawnDist) {
-    platforms.push(makePlatform(-PLAT_H - rnd(0, 8)));
-    nextSpawnDist += getPlatGap();
-  }
-
-  // Player
-  pl.prevY = pl.y;
-  pl.trail.push({ x: pl.x, y: pl.y, state: pl.state });
-  if (pl.trail.length > TRAIL_LEN) pl.trail.shift();
-
-  pl.vy += GRAVITY;
-  pl.y += pl.vy;
-  pl.y += scroll; // world scrolls player down
-  if (pl.splitAnim > 0) pl.splitAnim--;
-
-  // Collision (SOLID only — GHOST passes through everything)
-  if (pl.state === 'solid' && pl.vy > 0) {
-    const pL = pl.x - PL_W / 2 + 2;
-    const pR = pl.x + PL_W / 2 - 2;
-    const foot = pl.y + PL_H / 2;
-    // Swept collision: foot crossed platTop this frame.
-    // Platform moved down by scroll this frame (from p.y-scroll to p.y).
-    // Foot moved from prevFoot to foot.
-    const prevFoot = pl.prevY + PL_H / 2;
-
-    for (const p of platforms) {
-      if (pR < p.x + 2 || pL > p.x + p.w - 2) continue;
-      const platTop = p.y;
-      // foot was above platform before, at/below after (±4px tolerance)
-      if (prevFoot <= platTop - scroll + 4 && foot >= platTop) {
-        const etype = effectiveType(p);
-        if (etype === 'safe') {
-          pl.y = platTop - PL_H / 2;
-          pl.vy = BOUNCE_BASE - scroll * 0.38;
-          combo++;
-          comboMult = calcMult(combo);
-          landings++;
-          score += comboMult;
-          if (score > highScore) { highScore = score; saveHS(); isNewBest = true; }
-          const ftxt = comboMult > 1 ? `+${comboMult}  ×${comboMult}` : '+1';
-          const fcol = comboMult >= 8 ? '#ffe000' : comboMult >= 4 ? '#0ff' : '#afffef';
-          spawnFloater(p.x + p.w / 2, p.y - 6, ftxt, fcol);
-          emitParticles(p.x + p.w / 2, p.y, 6, 'hsl(180,100%,70%)', 3.5);
-          p.flashTimer = 3;
-        } else {
-          triggerDeath();
-        }
-        break;
-      }
-    }
-  }
-
-  // Fell off bottom
-  if (pl.y - PL_H / 2 > H + 10) triggerDeath();
-
-  updateParticles();
-  updateFloaters();
-}
-
-// ============================================================
-// DRAW PLATFORMS
-// ============================================================
-function drawPlatSafe(p) {
-  const flash = p.flashTimer > 0;
-  ctx.save();
-  ctx.shadowColor = 'hsl(180,100%,60%)';
-  ctx.shadowBlur = flash ? 22 : 8;
-  ctx.fillStyle = flash ? '#ffffff' : 'hsl(180,100%,60%)';
-  ctx.fillRect(p.x, p.y, p.w, p.h);
-  ctx.shadowBlur = 0;
-  // inner glow line
-  ctx.globalAlpha = 0.4;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(p.x + 2, p.y + 1, p.w - 4, 2);
-  ctx.restore();
-}
-
-function drawPlatCorrupt(p) {
-  ctx.save();
-  ctx.fillStyle = 'hsl(300,80%,38%)';
-  ctx.fillRect(p.x, p.y, p.w, p.h);
-  // Scanline noise
-  const t = Date.now() / 80;
-  ctx.fillStyle = 'rgba(255,40,220,0.45)';
-  for (let i = 0; i < 3; i++) {
-    const lineY = p.y + ((Math.floor(t + i * 4) % PLAT_H + PLAT_H) % PLAT_H);
-    ctx.fillRect(p.x, lineY, p.w, 1);
-  }
-  // Label
-  ctx.font = '7px monospace';
-  ctx.fillStyle = 'rgba(255,120,255,0.9)';
-  ctx.textAlign = 'center';
-  ctx.fillText('CORRUPT', p.x + p.w / 2, p.y + 9);
-  ctx.restore();
-}
-
-function drawPlatFlicker(p) {
-  const t = Math.sin(Date.now() / 400 + p.flickerOff);
-  const blend = (t + 1) / 2;
-  const hue = 180 * blend + 300 * (1 - blend);
-  const sat = 100 * blend + 80 * (1 - blend);
-  const lit = 60 * blend + 38 * (1 - blend);
-  ctx.save();
-  ctx.shadowColor = `hsl(${hue},${sat}%,${lit}%)`;
-  ctx.shadowBlur = 10 + Math.abs(t) * 5;
-  ctx.fillStyle = `hsl(${hue},${sat}%,${lit}%)`;
-  ctx.fillRect(p.x, p.y, p.w, p.h);
-  ctx.shadowBlur = 0;
-  // Label
-  ctx.font = '7px monospace';
-  ctx.fillStyle = `rgba(255,255,255,${0.5 + Math.abs(t) * 0.4})`;
-  ctx.textAlign = 'center';
-  ctx.fillText('FLUX', p.x + p.w / 2, p.y + 9);
-  ctx.restore();
-}
-
-function drawPlatforms() {
-  for (const p of platforms) {
-    const etype = effectiveType(p);
-    if (etype === 'safe') drawPlatSafe(p);
-    else if (etype === 'corrupt') drawPlatCorrupt(p);
-    else drawPlatFlicker(p);
-  }
-}
-
-// ============================================================
-// DRAW PLAYER
-// ============================================================
-function drawPlayer() {
-  if (state === 'dead' || state === 'gameover') {
-    // Only draw shards
-    return;
-  }
-
-  // Trail / afterimage
-  for (let i = 0; i < pl.trail.length; i++) {
-    const t = pl.trail[i];
-    const a = (i + 1) / pl.trail.length * 0.13;
-    const col = t.state === 'solid' ? `rgba(0,255,200,${a})` : `rgba(160,60,255,${a})`;
-    ctx.fillStyle = col;
-    ctx.fillRect(t.x - PL_W / 2, t.y - PL_H / 2, PL_W, PL_H);
-  }
-
-  const x = pl.x, y = pl.y;
-
-  // Split anim (chromatic split on toggle)
-  if (pl.splitAnim > 0) {
-    const off = (pl.splitAnim / 3) * 5;
-    ctx.save();
-    ctx.globalAlpha = 0.45;
-    ctx.fillStyle = '#0fffc8';
-    ctx.fillRect(x - PL_W / 2 - off, y - PL_H / 2, PL_W, PL_H);
-    ctx.fillStyle = '#9030ff';
-    ctx.fillRect(x - PL_W / 2 + off, y - PL_H / 2, PL_W, PL_H);
-    ctx.restore();
-  }
-
-  // Main sprite
-  ctx.save();
-  if (pl.state === 'solid') {
-    ctx.shadowColor = 'hsl(180,100%,65%)';
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = 'hsl(180,100%,65%)';
-    ctx.fillRect(x - PL_W / 2, y - PL_H / 2, PL_W, PL_H);
-    ctx.shadowBlur = 0;
-    // inner core
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.fillRect(x - PL_W / 2 + 3, y - PL_H / 2 + 3, PL_W - 6, PL_H - 6);
-  } else {
-    // Ghost
-    ctx.globalAlpha = 0.52;
-    ctx.shadowColor = 'hsl(270,80%,65%)';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = 'hsl(270,80%,60%)';
-    ctx.fillRect(x - PL_W / 2, y - PL_H / 2, PL_W, PL_H);
-    ctx.shadowBlur = 0;
-    ctx.restore();
-    ctx.save();
-    ctx.globalAlpha = 0.75;
-    ctx.strokeStyle = 'hsl(270,80%,85%)';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(x - PL_W / 2, y - PL_H / 2, PL_W, PL_H);
-  }
-  ctx.restore();
-}
-
-// ============================================================
-// DRAW HUD
-// ============================================================
 function drawHUD() {
-  // Score top-left
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,255,200,0.9)';
-  ctx.font = 'bold 18px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(score, 14, 32);
-
-  // High score top-right
-  ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(0,255,200,0.35)';
-  ctx.font = '13px monospace';
-  ctx.fillText('BEST ' + highScore, W - 14, 22);
-
-  // Challenge marker
-  if (qChallenge > 0 && score < qChallenge) {
-    ctx.fillStyle = 'rgba(255,200,0,0.6)';
-    ctx.font = '11px monospace';
-    ctx.fillText('BEAT ' + qChallenge, W - 14, 38);
-  }
-
-  // State indicator bottom
-  const stateColor = pl.state === 'solid' ? '#0fffc8' : '#b060ff';
-  const stateLabel = pl.state === 'solid' ? '[ SOLID ]' : '[ GHOST ]';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = stateColor;
-  ctx.font = 'bold 14px monospace';
-  ctx.globalAlpha = 0.85;
-  ctx.fillText(stateLabel, W / 2, H - 16);
-  ctx.restore();
-
-  // Combo multiplier watermark
-  if (comboMult > 1) {
-    ctx.save();
-    const mult = comboMult;
-    ctx.globalAlpha = 0.12 + (mult / 8) * 0.12;
-    ctx.font = `bold ${70 + mult * 8}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillStyle = mult >= 8 ? '#ffe000' : '#0fffc8';
-    ctx.fillText(`×${mult}`, W / 2, H / 2 + 40);
-    ctx.restore();
-  }
-
-  // ×8 scanline overlay
-  if (comboMult >= 8) {
-    ctx.save();
-    ctx.globalAlpha = 0.07;
-    ctx.fillStyle = '#0fffc8';
-    for (let sy = 0; sy < H; sy += 4) ctx.fillRect(0, sy, W, 1);
-    ctx.restore();
-  }
-
-  // Zone message
-  if (zoneMsg && zoneMsg.alpha > 0) {
-    ctx.save();
-    ctx.globalAlpha = zoneMsg.alpha;
-    ctx.font = 'bold 15px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#ff80ff';
-    ctx.fillText(zoneMsg.text, W / 2, H * 0.22);
-    ctx.restore();
-  }
-}
-
-// ============================================================
-// DRAW BACKGROUND
-// ============================================================
-function drawBG() {
-  // Background gradient: deep navy drifting to dark magenta
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, `hsl(${bgHue},55%,5%)`);
-  grad.addColorStop(1, `hsl(${bgHue + 20},45%,8%)`);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-}
-
-// ============================================================
-// START SCREEN
-// ============================================================
-function drawStart() {
-  drawBG();
-  drawRain();
-
-  ctx.save();
-
-  // Title
-  const t = Date.now() / 800;
-  ctx.textAlign = 'center';
-  ctx.shadowColor = '#0fffc8';
-  ctx.shadowBlur = 18 + Math.sin(t) * 6;
-  ctx.fillStyle = '#0fffc8';
-  ctx.font = 'bold 36px monospace';
-  ctx.fillText('GLITCH', W / 2, H * 0.30);
-  ctx.fillStyle = '#c8fffe';
-  ctx.fillText('ASCENT', W / 2, H * 0.38);
-  ctx.shadowBlur = 0;
-
-  ctx.fillStyle = 'rgba(200,160,255,0.85)';
-  ctx.font = '14px monospace';
-  ctx.fillText('— PHASE LOCK —', W / 2, H * 0.46);
-
-  // Mechanic explainer
-  ctx.font = '12px monospace';
-  ctx.fillStyle = 'rgba(0,255,200,0.7)';
-  ctx.fillText('TAP to toggle SOLID / GHOST', W / 2, H * 0.56);
-
-  ctx.fillStyle = 'rgba(0,255,200,0.55)';
-  ctx.font = '11px monospace';
-  ctx.fillText('SOLID: land on cyan platforms', W / 2, H * 0.62);
-  ctx.fillText('GHOST: phase through magenta barriers', W / 2, H * 0.67);
-
-  // Blink "TAP TO START"
-  if (Math.sin(Date.now() / 400) > 0) {
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 17px monospace';
-    ctx.fillText('TAP TO START', W / 2, H * 0.80);
-  }
-
-  // High score
-  if (highScore > 0) {
-    ctx.fillStyle = 'rgba(0,255,200,0.4)';
-    ctx.font = '13px monospace';
-    ctx.fillText('BEST: ' + highScore, W / 2, H * 0.88);
-  }
-
-  // Challenge
-  if (qChallenge > 0) {
-    ctx.fillStyle = 'rgba(255,200,0,0.7)';
-    ctx.font = '13px monospace';
-    ctx.fillText(`CHALLENGE: BEAT ${qChallenge}`, W / 2, H * 0.93);
-  }
-
-  ctx.restore();
-}
-
-// ============================================================
-// GAME OVER SCREEN
-// ============================================================
-function drawGameOver() {
-  drawBG();
-  drawRain();
-  drawParticles();
-
-  const elapsed = deathTimer;
-
-  ctx.save();
-  ctx.textAlign = 'center';
-
-  // Red flash overlay (on death)
-  if (deathFlash > 0) {
-    ctx.fillStyle = `rgba(255,0,0,${0.4 * deathFlash / 2})`;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // "CORRUPTED" text fades in
-  if (elapsed > 300) {
-    const a = clamp((elapsed - 300) / 300, 0, 1);
-    ctx.globalAlpha = a;
-    ctx.shadowColor = '#ff00aa';
-    ctx.shadowBlur = 20;
-    ctx.fillStyle = '#ff40c0';
-    ctx.font = 'bold 32px monospace';
-    ctx.fillText('CORRUPTED', W / 2, H * 0.32);
-    ctx.shadowBlur = 0;
-  }
-
-  // Score
-  ctx.globalAlpha = clamp((elapsed - 400) / 300, 0, 1);
-  ctx.fillStyle = '#0fffc8';
+  ctx.fillStyle = `hsl(${hue},100%,75%)`;
   ctx.font = 'bold 22px monospace';
-  ctx.fillText(score + ' pts', W / 2, H * 0.46);
+  ctx.textAlign = 'left';
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = 10;
+  ctx.fillText(score, 16, 40);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '12px monospace';
+  ctx.fillText('BEST ' + best, 16, 58);
 
-  if (isNewBest) {
-    ctx.fillStyle = '#ffe000';
-    ctx.font = 'bold 14px monospace';
-    ctx.fillText('NEW BEST!', W / 2, H * 0.52);
-  } else {
-    ctx.fillStyle = 'rgba(0,255,200,0.4)';
-    ctx.font = '13px monospace';
-    ctx.fillText('BEST: ' + highScore, W / 2, H * 0.52);
-  }
-
-  // Session run count
-  ctx.fillStyle = 'rgba(200,200,200,0.35)';
-  ctx.font = '11px monospace';
-  ctx.fillText('Run ' + sessionRuns + ' this session', W / 2, H * 0.58);
-
-  // Retry button (appears at 800ms)
-  if (elapsed > 800) {
-    retryReady = true;
-    const btnA = clamp((elapsed - 800) / 200, 0, 1);
-    ctx.globalAlpha = btnA;
-
-    // RETRY
-    ctx.shadowColor = '#0fffc8';
+  if (combo > 1) {
+    ctx.fillStyle = '#ff0';
+    ctx.font = 'bold ' + (14 + combo * 2) + 'px monospace';
+    ctx.textAlign = 'right';
+    ctx.shadowColor = '#ff0';
     ctx.shadowBlur = 12;
-    ctx.fillStyle = '#0fffc8';
-    ctx.font = 'bold 20px monospace';
-    ctx.fillText('[ RETRY ]', W / 2, H * 0.68);
+    ctx.fillText('x' + combo, W - 16, 40);
     ctx.shadowBlur = 0;
-
-    // SHARE
-    ctx.fillStyle = 'rgba(200,160,255,0.8)';
-    ctx.font = '14px monospace';
-    ctx.fillText('[ SHARE SCORE ]', W / 2, H * 0.76);
   }
 
-  // Space hint
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = '#aaa';
-  ctx.font = '11px monospace';
-  ctx.fillText('SPACE to retry', W / 2, H * 0.92);
-
-  ctx.restore();
+  const sc = player.solid ? '#0ff' : '#c0f';
+  ctx.fillStyle = sc;
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = sc;
+  ctx.shadowBlur = 8;
+  ctx.fillText(player.solid ? '[ SOLID ]' : '[ GHOST ]', W/2, 36);
+  ctx.shadowBlur = 0;
 }
 
-// ============================================================
-// MAIN DRAW
-// ============================================================
-function draw() {
-  if (state === 'start') {
-    drawStart();
-    return;
+function drawStart() {
+  drawBg();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = `hsl(${hue},100%,70%)`;
+  ctx.font = 'bold 40px monospace';
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = 24;
+  ctx.fillText('GLITCH', W/2, H/2 - 88);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('ASCENT', W/2, H/2 - 46);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
+  ctx.font = '13px monospace';
+  ctx.fillText('Climb the corrupted tower.', W/2, H/2 + 4);
+  ctx.fillText('TAP to toggle SOLID / GHOST.', W/2, H/2 + 24);
+  ctx.fillStyle = '#0ff';
+  ctx.font = '12px monospace';
+  ctx.fillText('SOLID  lands on  [SAFE]', W/2, H/2 + 54);
+  ctx.fillStyle = '#c0f';
+  ctx.fillText('GHOST  passes  [CORRUPT]', W/2, H/2 + 72);
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText('TAP TO START', W/2, H/2 + 118);
+  ctx.globalAlpha = 1;
+  if (best > 0) {
+    ctx.fillStyle = 'rgba(255,255,0,0.6)';
+    ctx.font = '12px monospace';
+    ctx.fillText('BEST: ' + best, W/2, H/2 + 142);
   }
-  if (state === 'gameover') {
-    drawGameOver();
-    drawFloaters(); // allow share floater to show
-    return;
-  }
+}
 
-  ctx.save();
-  ctx.translate(shakeX, shakeY);
-
-  drawBG();
-  drawRain();
-  drawPlatforms();
-  drawPlayer();
+function drawGameover() {
+  drawBg();
   drawParticles();
-  drawFloaters();
-  drawHUD();
-
-  // Red flash on death while 'dead' state
-  if (state === 'dead' && deathFlash > 0) {
-    ctx.fillStyle = `rgba(255,0,0,${0.4 * deathFlash / 2})`;
-    ctx.fillRect(-shakeX, -shakeY, W, H);
-  }
-
-  ctx.restore();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#f44';
+  ctx.font = 'bold 30px monospace';
+  ctx.shadowColor = '#f44';
+  ctx.shadowBlur = 20;
+  ctx.fillText('CORRUPTED', W/2, H/2 - 80);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = `hsl(${hue},100%,70%)`;
+  ctx.font = 'bold 54px monospace';
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = 16;
+  ctx.fillText(score, W/2, H/2 - 14);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '14px monospace';
+  ctx.fillText('BEST: ' + best, W/2, H/2 + 22);
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText('TAP TO RETRY', W/2, H/2 + 68);
+  ctx.globalAlpha = 1;
 }
 
-// ============================================================
-// GAME LOOP
-// ============================================================
 function loop(ts) {
-  update(ts);
-  draw();
+  const elapsed = ts - lastTime;
+  lastTime = ts;
+  hue = (hue + 0.25) % 360;
+
+  if (state === 'playing') {
+    update();
+    ctx.save();
+    ctx.translate(shakeDx, shakeDy);
+    drawBg();
+    for (const p of platforms) drawPlatform(p);
+    drawParticles();
+    drawPlayer();
+    ctx.restore();
+    drawHUD();
+  } else if (state === 'start') {
+    hue = (hue + 0.1) % 360;
+    drawStart();
+  } else {
+    drawGameover();
+  }
+
   requestAnimationFrame(loop);
 }
 
-// On dead state, increment deathTimer in the loop
-// Override update to handle gameover transition properly
-(function patchUpdate() {
-  const _orig = update;
-  // Already handled above; no patch needed
-})();
-
 requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(loop); });
+
+})();
 </script>
 </body>
 </html>
